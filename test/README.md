@@ -89,16 +89,16 @@ usr sys idl wai stl| read  writ| recv  send|  in   out | int   csw
 * linux kernel:5.15.0-88-generic
 * cpu model name:Intel(R) Xeon(R) CPU E5-2697 v3 @ 2.60GHz
 * ls -l /dev/sd*
--- brw-rw---- 1 root disk 8,   0 2023/11/27 16:03 /dev/sda
--- brw-rw---- 1 root disk 8,  16 2023/11/27 16:03 /dev/sdb
--- brw-rw---- 1 root disk 8,  32 2023/11/27 16:03 /dev/sdc
--- brw-rw---- 1 root disk 8,  48 2023/11/27 16:03 /dev/sdd
--- brw-rw---- 1 root disk 8,  64 2023/11/27 16:03 /dev/sde
--- brw-rw---- 1 root disk 8,  80 2023/11/27 16:03 /dev/sdf
--- brw-rw---- 1 root disk 8,  96 2023/11/27 16:03 /dev/sdg
--- brw-rw---- 1 root disk 8, 112 2023/11/27 16:03 /dev/sdh
--- brw-rw---- 1 root disk 8, 128 2023/11/27 16:03 /dev/sdi
--- brw-rw---- 1 root disk 8, 144 2023/11/27 16:03 /dev/sdj
+*  brw-rw---- 1 root disk 8,   0 2023/11/27 16:03 /dev/sda
+*  brw-rw---- 1 root disk 8,  16 2023/11/27 16:03 /dev/sdb
+*  brw-rw---- 1 root disk 8,  32 2023/11/27 16:03 /dev/sdc
+*  brw-rw---- 1 root disk 8,  48 2023/11/27 16:03 /dev/sdd
+*  brw-rw---- 1 root disk 8,  64 2023/11/27 16:03 /dev/sde
+*  brw-rw---- 1 root disk 8,  80 2023/11/27 16:03 /dev/sdf
+*  brw-rw---- 1 root disk 8,  96 2023/11/27 16:03 /dev/sdg
+*  brw-rw---- 1 root disk 8, 112 2023/11/27 16:03 /dev/sdh
+*  brw-rw---- 1 root disk 8, 128 2023/11/27 16:03 /dev/sdi
+*  brw-rw---- 1 root disk 8, 144 2023/11/27 16:03 /dev/sdj
 
 
 # pp-serv.cpp 、pp-client.cpp
