@@ -21,6 +21,7 @@
 
 #include <byte_buffer.h>
 
+#include "io_loop.h"
 #include "log.h"
 #include "fd_aio.h"
 
@@ -31,9 +32,8 @@ struct io_aio_impl : io_aio
     static constexpr uint32_t _max_events = 256;
 
     aio_context_t _ctx = 0;
+    int _efd = -1;
     uint64_t _req=0,_res=0;
-
-    std::deque<int> _efd_cache;
 
     io_aio_impl()
     {
@@ -43,36 +43,29 @@ struct io_aio_impl : io_aio
             return;
         }
 
-        for (int i = 0; i < 32; i++)
-        {
-            _efd_cache.push_back(eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC));
-        }
+        _efd = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
     }
 
     ~io_aio_impl()
     {
-        io_destroy(_ctx);
-        for (auto fd : _efd_cache)
-        {
-            ::close(fd);
-        }
+        if (_ctx != 0)
+            io_destroy(_ctx);
+
+        if (_efd != -1)
+            ::close(_efd);
     }
 
-    int alloc_efd()
+    virtual int event_fd() noexcept override
     {
-        if (!_efd_cache.empty())
-        {
-            int fd = _efd_cache.back();
-            _efd_cache.pop_back();
-            return fd;
-        }
-
-        return eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
+        return _efd;
     }
 
-    virtual void aio_complete(int efd) noexcept override
+    virtual int on_fd_event(int) noexcept override
     {
-        _efd_cache.push_back(efd);
+        eventfd_t v;
+        ::eventfd_read(_efd, &v);
+        skip_events();
+        return 1;
     }
 
     void skip_events()
@@ -84,6 +77,12 @@ struct io_aio_impl : io_aio
 
             if(rc>0)
             {
+                for (int i = 0; i < rc; i++)
+                {
+                    io_callback * icb = (io_callback *)e[i].data;
+                    icb->on_fd_event(io_loop::EM_READ);
+                }
+
                 _res+=rc;
                 break;
             }
@@ -125,37 +124,38 @@ struct io_aio_impl : io_aio
         }
     }
 
-    virtual int aio_read(int fd, off_t offset, size_t count, std::unique_ptr<byte_buffer> & buff) noexcept override
+    virtual int aio_read(
+        int fd, off_t offset, size_t count, std::unique_ptr<byte_buffer> & buff, io_callback * icb) noexcept override
     {
         iocb b;
 
         buff->set_data_begin(0);
         buff->set_data_len(count);
 
-        int efd = alloc_efd();
-        set_iocb(b, fd, false, offset, buff->data(), count, efd);
+        set_iocb(b, fd, false, offset, buff->data(), count, _efd, icb);
 
         submit(&b);
-
-        return efd;
+        return 0;
     }
 
-    virtual int aio_write(int fd, off_t offset, std::unique_ptr<byte_buffer> & buff) noexcept override
+    virtual int
+    aio_write(int fd, off_t offset, std::unique_ptr<byte_buffer> & buff, io_callback * icb) noexcept override
     {
         iocb b;
 
-        int efd = alloc_efd();
-        set_iocb(b, fd, true, offset, buff->data(), buff->data_len(), efd);
+        set_iocb(b, fd, true, offset, buff->data(), buff->data_len(), _efd, icb);
 
         submit(&b);
 
-        return efd;
+        return 0;
     }
 
-    static void set_iocb(iocb & b, int fd, bool is_write, size_t off, const void * buff, size_t len, int efd)
+    static void
+    set_iocb(iocb & b, int fd, bool is_write, size_t off, const void * buff, size_t len, int efd, void * icb)
     {
         memset(&b, 0, sizeof(iocb));
 
+        b.aio_data = (uint64_t)icb;
         b.aio_lio_opcode = is_write ? IOCB_CMD_PWRITE : IOCB_CMD_PREAD;
         b.aio_fildes = fd;
         b.aio_offset = off;

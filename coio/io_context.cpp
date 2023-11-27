@@ -8,6 +8,7 @@ thread_local io_context * this_context = nullptr;
 
 io_context::io_context()
 {
+    this->wait_read(_aio->event_fd(), _aio.get());
 }
 
 void io_context::thread_func(std::promise<void> & ready)

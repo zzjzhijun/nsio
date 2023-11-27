@@ -36,22 +36,17 @@ struct io_context final : io_loop
 
     void thread_func(std::promise<void> & ready);
 
-    int aio_read(int fd, off_t offset, size_t count, std::unique_ptr<byte_buffer> & buff) noexcept
+    int aio_read(int fd, off_t offset, size_t count, std::unique_ptr<byte_buffer> & buff, io_callback * icb) noexcept
     {
         assert(!buff.get());
 
         _buf_cache->malloc(count, 12, 0).swap(buff);
-        return _aio->aio_read(fd, offset, count, buff);
+        return _aio->aio_read(fd, offset, count, buff, icb);
     }
 
-    int aio_write(int fd, off_t offset, std::unique_ptr<byte_buffer> & buff) noexcept
+    int aio_write(int fd, off_t offset, std::unique_ptr<byte_buffer> & buff, io_callback * icb) noexcept
     {
-        return _aio->aio_write(fd, offset, buff);
-    }
-
-    void aio_complete(int efd)
-    {
-        return _aio->aio_complete(efd);
+        return _aio->aio_write(fd, offset, buff, icb);
     }
 };
 
