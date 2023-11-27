@@ -3,6 +3,9 @@
 
 * !!!注意，代码是固定写硬盘 /dev/sd{a...j}，这是我会用到的场景
 
+## 测试结果 
+
+- dstat -a
 
 ### sudo ./test-diskw 4
 * --total-cpu-usage-- -dsk/total- -net/total- ---paging-- ---system--
@@ -69,7 +72,7 @@ usr sys idl wai stl| read  writ| recv  send|  in   out | int   csw
 *   0   0 100   0   0|   0  1695M| 315B  538B|   0     0 |7233  1355
 
 
-### sudo ./test-diskw 8192
+### sudo ./test-diskw 16384
 * --total-cpu-usage-- -dsk/total- -net/total- ---paging-- ---system--
 * usr sys idl wai stl| read  writ| recv  send|  in   out | int   csw
 *   1   1  98   0   0|   0  1891M| 443B  538B|   0     0 |8723  1755
@@ -82,15 +85,20 @@ usr sys idl wai stl| read  writ| recv  send|  in   out | int   csw
 *   0   0  97   2   0|  64k 1764M| 256B  538B|   0     0 |8323  2977
 *   0   0  97   3   0|  80k 1748M| 251B  538B|   0     0 |8144  2684
 
-
-
-
-
-
-
-
-
-
+## 环境:
+* linux kernel:5.15.0-88-generic
+* cpu model name:Intel(R) Xeon(R) CPU E5-2697 v3 @ 2.60GHz
+* ls -l /dev/sd*
+-- brw-rw---- 1 root disk 8,   0 2023/11/27 16:03 /dev/sda
+-- brw-rw---- 1 root disk 8,  16 2023/11/27 16:03 /dev/sdb
+-- brw-rw---- 1 root disk 8,  32 2023/11/27 16:03 /dev/sdc
+-- brw-rw---- 1 root disk 8,  48 2023/11/27 16:03 /dev/sdd
+-- brw-rw---- 1 root disk 8,  64 2023/11/27 16:03 /dev/sde
+-- brw-rw---- 1 root disk 8,  80 2023/11/27 16:03 /dev/sdf
+-- brw-rw---- 1 root disk 8,  96 2023/11/27 16:03 /dev/sdg
+-- brw-rw---- 1 root disk 8, 112 2023/11/27 16:03 /dev/sdh
+-- brw-rw---- 1 root disk 8, 128 2023/11/27 16:03 /dev/sdi
+-- brw-rw---- 1 root disk 8, 144 2023/11/27 16:03 /dev/sdj
 
 
 # pp-serv.cpp 、pp-client.cpp
