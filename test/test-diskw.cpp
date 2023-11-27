@@ -59,8 +59,16 @@ co2::task<> write_disk(std::string path, uint32_t block_size)
 }
 
 
-int main()
+int main(int argc, char ** argv)
 {
+    if (argc < 2)
+    {
+        printf("usages:%s block_size\n", argv[0]);
+        return -1;
+    }
+
+    uint32_t bs = atoi(argv[1]);
+
     stop_signal sw(&force_quit);
 
     co2::io_context ctx;
@@ -71,7 +79,7 @@ int main()
     for (int i = 0; i < 10; i++)
     {
         sprintf(path, "/dev/sd%c", 'a' + i);
-        ctx.co_spawn(write_disk(path, 4 << 20));
+        ctx.co_spawn(write_disk(path, bs << 10));
     }
 
     while (!force_quit)
