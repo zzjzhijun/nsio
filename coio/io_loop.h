@@ -188,7 +188,11 @@ struct alignas(64) io_loop : io_callback //for-eventfd
                 {
                     int e = 0;
                     socklen_t elen = sizeof(e);
-                    ::getsockopt(fd, SOL_SOCKET, SO_ERROR, &e, &elen);
+                    int rc = ::getsockopt(fd, SOL_SOCKET, SO_ERROR, &e, &elen);
+                    if (rc == -1 && errno == ENOTSOCK)
+                    {
+                        e = 0;
+                    }
 
                     if (fe._enable_write)
                     {

@@ -5,7 +5,7 @@ project(nsio LANGUAGES C CXX ASM)
 include (cmake/arch.cmake)
 include (cmake/target.cmake)
 include (cmake/tools.cmake)
-include (cmake/ccache.cmake)
+#include (cmake/ccache.cmake)
 include (cmake/clang_tidy.cmake)
 include (cmake/git.cmake)
 

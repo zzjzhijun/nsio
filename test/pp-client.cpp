@@ -10,13 +10,12 @@
 #include <memory>
 #include <thread>
 
-#include "io_context.h"
 #include "zio.h"
 #include "log.h"
 #include "clock.h"
 #include "stop_signal.h"
 
-#include <io_awaiter.h>
+#include <nio_awaiter.h>
 
 volatile int force_quit = 0;
 
