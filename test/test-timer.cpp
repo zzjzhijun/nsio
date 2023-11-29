@@ -44,7 +44,7 @@ int main()
     signal(SIGINT, signal_handler);
 
     co2::io_context ctx;
-    ctx.start();
+    ctx.run_worker();
 
     for (int i = 0; i < 1000000; i++)
     {

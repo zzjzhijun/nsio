@@ -14,10 +14,9 @@
 namespace co2
 {
 
-int accept::on_fd_event(int)
+void accept::on_file_event(es_file & es, int)
 {
-    const auto serv_fd = _serv_fd;
-
+    const auto serv_fd = es._fd;
     int fd;
     for (;;)
     {
@@ -28,20 +27,25 @@ int accept::on_fd_event(int)
                 continue;
 
             if (errno == EAGAIN)
-                return 1;
+            {
+                es._func_r = this;
+                return;
+            }
 
             if (errno == ECONNABORTED)
             {
                 log_warn("accept socket:%d, will again...", serv_fd);
-                return 1;
+                es._func_r = this;
+                return;
             }
 
             log_errno("accept socket:%d", serv_fd);
         }
 
         _result = fd;
+
+        log_debug("socket %d connected", fd);
         _handle.resume();
-        return 0;
     }
 }
 
@@ -50,28 +54,41 @@ accept::accept(int serv_fd) noexcept : _serv_fd(serv_fd)
     this_context->wait_read(serv_fd, this);
 }
 
-void connect::on_time_out()
+void connect::on_time_event(es_time &)
 {
+    this->_is_timeout = 1;
+    this->_timer_id = 0;
+
+    log_debug("socket %d do-connect timeout.", _sockfd);
+    this_context->cancel_write(_sockfd);
+    this->_handle.resume();
 }
 
-int connect::on_fd_event(int event)
+void connect::on_file_event(es_file & es, int event)
 {
-    if (event == io_loop::EM_WRITE)
+    if (event <= 0)
+    {
+        errno = -event;
+        this_context->cancel_write(_sockfd);
+        log_errno("connect");
+    }
+    else if (event == io_loop::EM_WRITE)
     {
         int e = 0;
         socklen_t elen = sizeof(e);
-        ::getsockopt(_sockfd, SOL_SOCKET, SO_ERROR, &e, &elen);
+        ::getsockopt(es._fd, SOL_SOCKET, SO_ERROR, &e, &elen);
         if (e == 0)
         {
             this->_result = 0;
         }
+
+        log_debug("socket %d do-connect ok.", _sockfd);
     }
 
     this->_handle.resume();
-    return 0;
 }
 
-connect::connect(int sockfd, const char * ip, uint16_t port) noexcept
+connect::connect(int sockfd, const char * ip, uint16_t port, double time_out_sec) noexcept : timeout(time_out_sec)
 {
     _sockfd = sockfd;
 
@@ -88,77 +105,34 @@ connect::connect(int sockfd, const char * ip, uint16_t port) noexcept
 
             if (errno == EINPROGRESS)
             {
-                errno = 0;
                 this_context->wait_write(sockfd, this);
                 break;
             }
 
-            log_errno("recv_some");
-            break;
+            log_errno("connect");
         }
-        else if (rc == 0)
-        {
-            _result = 0;
-            return;
-        }
+
+        break;
     }
 }
 
 
-int recv_some::on_fd_event(int event)
-{
-    if (event <= 0) [[unlikely]]
-    {
-        log_warn("socket:%d error:%d %s", _sockfd, -event, strerror(-event));
-        _handle.resume();
-        return 0;
-    }
-
-    for (;;)
-    {
-        auto rc = ::recv(_sockfd, _buff.data(), _buff.size(), _flags);
-
-        if (rc < 0) [[unlikely]]
-        {
-            if (errno == EINTR)
-                continue;
-
-            if (errno == EAGAIN)
-                return 1;
-
-            log_errno("recv_some");
-        }
-
-        _result = rc;
-        _handle.resume();
-        return 0;
-    }
-}
-
-recv_some::recv_some(int sockfd, std::span<char> buf, int flags) noexcept : _sockfd(sockfd), _flags(flags), _buff(buf)
-{
-    this_context->wait_read(sockfd, this);
-}
-
-
-void recv_lazy::on_time_out()
+void recv_lazy::on_time_event(es_time &)
 {
     this->_is_timeout = 1;
-    this->_result = 0;
     this_context->cancel_read(_sockfd);
 
     this->_handle.resume();
 }
 
-int recv_lazy::on_fd_event(int event)
+void recv_lazy::on_file_event(es_file & es, int event)
 {
     if (event <= 0) [[unlikely]]
     {
+        errno = -event;
         log_warn("socket:%d error:%d %s", _sockfd, -event, strerror(-event));
-
-        cancel_delay();
         _handle.resume();
-        return 0;
+        return;
     }
 
     for (; _recved_bytes < (int)_buff.size();)
@@ -172,8 +146,11 @@ int recv_lazy::on_fd_event(int event)
         }
         else if (rc < 0)
         {
-            if (errno == EAGAIN)
-                return 1;
+            if (errno == EAGAIN) [[likely]]
+            {
+                es._func_r = this;
+                return;
+            }
 
             if (errno == EINTR)
                 continue;
@@ -186,132 +163,81 @@ int recv_lazy::on_fd_event(int event)
         }
 
         _result = rc;
-        cancel_delay();
         _handle.resume();
-
-        return 0;
+        return;
     }
-
-    cancel_delay();
 
     _result = _recved_bytes;
     _handle.resume();
-
-    return 0;
 }
 
-recv_lazy::recv_lazy(int sockfd, std::span<char> buf, double time_out_sec, int flags) noexcept
+recv_lazy::recv_lazy(int sockfd, std::span<char> buf, double time_out_sec, int flags) noexcept : timeout(time_out_sec)
 {
-    if (time_out_sec > 0)
-    {
-        _timer_id = this_context->delay_call(time_out_sec, this);
-    }
-
     _sockfd = sockfd;
     _flags = flags;
     _buff = buf;
-
     this_context->wait_read(sockfd, this);
 }
 
 
-int send_some::on_fd_event(int event)
-{
-    const auto sockfd = _sockfd;
-    const auto flags = _flags;
-
-    if (event <= 0) [[unlikely]]
-    {
-        log_warn("socket:%d error:%d %s", sockfd, -event, strerror(-event));
-        this_context->cancel_write(sockfd);
-        _handle.resume();
-    }
-
-    for (;;)
-    {
-        auto rc = ::send(sockfd, _buff.data(), _buff.size(), flags);
-
-        if (rc < 0)
-        {
-            if (errno == EAGAIN)
-                return 1;
-
-            if (errno == EINTR)
-                continue;
-
-            log_errno("send_some");
-        }
-
-        _result = rc;
-        _handle.resume();
-        return 0;
-    }
-}
-
-send_some::send_some(int sockfd, std::span<const char> buf, int flags) noexcept
-    : _sockfd(sockfd), _flags(flags), _buff(buf)
-{
-    this_context->wait_write(sockfd, this);
-}
-
-void send_lazy::on_time_out()
+void send_lazy::on_time_event(es_time &)
 {
     this->_is_timeout = 1;
+    this->_timer_id = 0;
     this->_result = 0;
     this_context->cancel_write(_sockfd);
+
     this->_handle.resume();
 }
 
-int send_lazy::on_fd_event(int event)
+void send_lazy::on_file_event(es_file & es, int event)
 {
     if (event <= 0) [[unlikely]]
     {
         log_warn("socket:%d error:%d %s", _sockfd, -event, strerror(-event));
-        cancel_delay();
-        this_context->cancel_delay(_timer_id);
         _handle.resume();
-        return 0;
+        return;
     }
 
     for (; _sended_bytes < (int)_buff.size();)
     {
         auto rc = ::send(_sockfd, _buff.data() + _sended_bytes, _buff.size() - _sended_bytes, _flags);
 
-        if (rc > 0)
-        {
-            _sended_bytes += rc;
-            continue;
-        }
-        else if (rc < 0)
+        if (rc < 0)
         {
             if (errno == EAGAIN)
-                return 1;
+            {
+                es._func_w = this;
+                return;
+            }
 
             if (errno == EINTR)
                 continue;
 
             log_errno("send_lazy");
         }
+        else if (rc > 0)
+        {
+            _sended_bytes += rc;
+            continue;
+        }
 
-        cancel_delay();
         _handle.resume();
-        return 0;
+        return;
     }
 
-    cancel_delay();
     _result = _sended_bytes;
     _handle.resume();
-    return 0;
+    return;
 }
 
 send_lazy::send_lazy(int sockfd, std::span<char> buf, double time_out_sec, int flags) noexcept
-    : _sockfd(sockfd), _flags(flags), _buff(buf)
+    : timeout(time_out_sec), _sockfd(sockfd), _flags(flags), _buff(buf)
 {
+    this_context->wait_write(sockfd, this);
     if (time_out_sec > 0)
     {
         _timer_id = this_context->delay_call(time_out_sec, this);
     }
-
-    this_context->wait_write(sockfd, this);
 }
 }

@@ -18,10 +18,11 @@ namespace co2
 struct io_context final : io_loop
 {
     std::unique_ptr<std::thread> _loc_thread;
-    std::unique_ptr<io_aio> _aio=io_aio::new_inst();
+    std::unique_ptr<io_aio> _aio;
     std::unique_ptr<byte_buffer_pool> _buf_cache = byte_buffer_pool::new_inst(32 << 20);
 
-    io_context();
+    io_context(bool use_aio = true);
+    ~io_context() noexcept;
 
     void co_spawn(co2::task<void> && entrance) noexcept
     {
@@ -30,9 +31,10 @@ struct io_context final : io_loop
         async_call([handle]() { handle(); });
     }
 
-    void start();
+    void run_worker();
+    void run_local(std::function<void()> init);
+
     void stop();
-    void join();
 
     void thread_func(std::promise<void> & ready);
 

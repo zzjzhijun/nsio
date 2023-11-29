@@ -10,6 +10,7 @@
 #include <memory>
 #include <thread>
 
+#include "io_context.h"
 #include "zio.h"
 #include "log.h"
 #include "clock.h"
@@ -67,6 +68,7 @@ co2::task<> tcp_echo1(int fd)
 
     delete[] buff;
 }
+
 co2::task<> tcp_echo2(int fd)
 {
     co2::scope_exit exit_func(
@@ -76,16 +78,22 @@ co2::task<> tcp_echo2(int fd)
             ::close(fd);
         });
 
-    char * buff = new char[8192];
+    char * buff = new char[1 << 20];
     for (;;)
     {
         co2::recv_lazy task(fd, std::span(buff, 4), -1);
 
         auto len = co_await task;
 
+        if (len == 0) [[unlikely]]
+        {
+            log_errno("recv fd:%d len=%d is_timeout=%d, remote closed.", fd, len, task._is_timeout);
+            break;
+        }
+
         if (len != 4) [[unlikely]]
         {
-            log_errno("fd:%d len=%d is_timeout=%d", fd, len, task._is_timeout);
+            log_errno("recv fd:%d len=%d is_timeout=%d", fd, len, task._is_timeout);
             break;
         }
 
@@ -94,16 +102,22 @@ co2::task<> tcp_echo2(int fd)
         co2::recv_lazy task_data(fd, std::span(buff + 4, len_n), -1);
         len = co_await task_data;
 
+        if (len == 0) [[unlikely]]
+        {
+            log_errno("recv fd:%d len=%d is_timeout=%d, remote closed.", fd, len, task._is_timeout);
+            break;
+        }
+
         if (len != len_n) [[unlikely]]
         {
-            log_errno("fd:%d len=%d != %d is_timeout=%d", fd, len, len_n, task_data._is_timeout);
+            log_errno("recv fd:%d len=%d != %d is_timeout=%d", fd, len, len_n, task_data._is_timeout);
             break;
         }
 
         int len_s = co_await co2::send_lazy(fd, std::span(buff, len + 4));
         if (len + 4 != len_s) [[unlikely]]
         {
-            log_errno("fd:%d len=%d != %d is_timeout=%d", fd, len_s, len + 4, task_data._is_timeout);
+            log_errno("send fd:%d len=%d != %d ", fd, len_s, len + 4);
             break;
         }
 
@@ -124,9 +138,17 @@ co2::task<> tcp_echo2(int fd)
     delete[] buff;
 }
 
+volatile int force_quit = 0;
+
 co2::task<> tcp_server(short port)
 {
     int sock = zio::listen_on(port);
+    co2::scope_exit _(
+        [sock]()
+        {
+            zio::close(sock);
+            force_quit = 1;
+        });
 
     if (sock < 0)
     {
@@ -139,23 +161,21 @@ co2::task<> tcp_server(short port)
         int fd = co_await co2::accept(sock);
         if (fd >= 0)
         {
-            co2::this_context->co_spawn(tcp_echo1(fd));
+            zio::setiobuf(fd, 4 << 20, 4 << 20);
+            co2::this_context->co_spawn(tcp_echo2(fd));
             continue;
         }
         break;
     }
-
-    zio::close(sock);
 }
 
-volatile int force_quit = 0;
 
 int main()
 {
     stop_signal ss(&force_quit);
 
     co2::io_context ctx;
-    ctx.start();
+    ctx.run_worker();
 
     ctx.co_spawn(tcp_server(4000));
 

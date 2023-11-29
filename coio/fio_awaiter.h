@@ -1,31 +1,40 @@
 #pragma once
 
-#include <memory>
 #include <io_awaiter.h>
 
 namespace co2{
 
-struct aio_read_block : io_awaiter
+struct aio_block_rw : io_awaiter
 {
-    int _fd;
-    aio_read_block(int fd, off_t offset, size_t count, std::unique_ptr<byte_buffer> & buff) noexcept
+    void on_aio_event(io_event & e) override
     {
-        _fd = fd;
-        int rc = this_context->aio_read(fd, offset, count, buff, this);
-    }
+        if (e.res2 < 0) [[unlikely]]
+        {
+            errno = e.res;
+            log_errno("aio error");
+        }
+        else
+        {
+            _result = e.res;
+        }
 
-    int on_fd_event(int) override final;
+        _handle.resume();
+    }
 };
 
-struct aio_write_block : io_awaiter
+struct aio_read_block : aio_block_rw
 {
-    int _fd;
+    aio_read_block(int fd, off_t offset, size_t count, std::unique_ptr<byte_buffer> & buff) noexcept
+    {
+        this_context->aio_read(fd, offset, count, buff, this);
+    }
+};
+
+struct aio_write_block : aio_block_rw
+{
     aio_write_block(int fd, off_t offset, std::unique_ptr<byte_buffer> & buff) noexcept
     {
-        _fd = fd;
-        int rc = this_context->aio_write(fd, offset, buff, this);
+        this_context->aio_write(fd, offset, buff, this);
     }
-
-    int on_fd_event(int) override final;
 };
 }

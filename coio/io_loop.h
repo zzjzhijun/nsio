@@ -1,7 +1,7 @@
 
 #pragma once
 
-
+#include <linux/aio_abi.h>
 #include <sys/epoll.h>
 #include <sys/eventfd.h>
 #include <sys/time.h>
@@ -27,22 +27,24 @@
 
 #include <log.h>
 
+#include <io_callback.h>
+
 namespace co2
 {
-struct io_callback
+
+struct alignas(32) es_file
 {
-    //文件读写通知
-    virtual int on_fd_event(int)
-    {
-        return 0;
-    }
+    int _fd = -1;
+    uint32_t _event = 0;
+    io_callback * _func_w = nullptr;
+    io_callback * _func_r = nullptr;
+};
 
-    //定时器通知
-    virtual void on_time_out()
-    {
-    }
-
-    virtual ~io_callback() noexcept = default;
+struct es_time
+{
+    int _id;
+    std::chrono::time_point<std::chrono::system_clock> _when;
+    io_callback * _func = nullptr;
 };
 
 struct alignas(64) io_loop : io_callback //for-eventfd
@@ -65,35 +67,15 @@ struct alignas(64) io_loop : io_callback //for-eventfd
     int _epoll_fd, _event_fd;
     int _g_timer_id = 0;
 
-    struct alignas(32) fd_task
-    {
-        int _fd = -1;
-        uint32_t _event = 0;
-        int16_t _enable_read = 0;
-        int16_t _enable_write = 0;
-        uint16_t _read_func_version = 0;
-        uint16_t _write_func_version = 0;
-        io_callback * _func_w = nullptr;
-        io_callback * _func_r = nullptr;
-    };
-
-    std::vector<fd_task> _fds;
-
-    struct timer_task
-    {
-        int _id;
-        std::chrono::time_point<std::chrono::system_clock> _when;
-        io_callback * _func = nullptr;
-    };
-
-    std::vector<timer_task> _timer;
+    std::vector<es_file> _fds;
+    std::vector<es_time> _timer;
     std::vector<std::function<void()>> _async_funcs_tmp;
 
 
     alignas(64) std::mutex _async_mutex;
     std::vector<std::function<void()>> _async_funcs;
 
-    static bool compare_timer(const timer_task & l, const timer_task & r)
+    static bool compare_timer(const es_time & l, const es_time & r)
     {
         return l._when > r._when;
     }
@@ -127,7 +109,7 @@ struct alignas(64) io_loop : io_callback //for-eventfd
         return std::chrono::system_clock::now();
     }
 
-    int on_fd_event(int)
+    void on_file_event(es_file & es, int) override
     {
         uint64_t val;
         eventfd_read(_event_fd, &val);
@@ -142,7 +124,8 @@ struct alignas(64) io_loop : io_callback //for-eventfd
         }
 
         _async_funcs_tmp.clear();
-        return 1;
+
+        es._func_r = this;
     }
 
     int run()
@@ -184,6 +167,12 @@ struct alignas(64) io_loop : io_callback //for-eventfd
 
                 auto & fe = _fds[fd];
 
+                if (fe._fd == -1)
+                {
+                    assert(false);
+                    continue;
+                }
+
                 if (events[n].events & EV_ERR) [[unlikely]]
                 {
                     int e = 0;
@@ -194,41 +183,36 @@ struct alignas(64) io_loop : io_callback //for-eventfd
                         e = 0;
                     }
 
-                    if (fe._enable_write)
+                    if (fe._func_w)
                     {
-                        fe._enable_write = 0;
-                        //fe._write_func_version++;
-                        fe._func_w->on_fd_event(-e);
+                        auto f = fe._func_w;
+                        fe._func_w = nullptr;
+                        f->on_file_event(fe, -e);
                     }
-                    if (fe._enable_read)
+
+                    if (fe._func_r)
                     {
-                        fe._enable_read = 0;
-                        //fe._read_func_version++;
-                        fe._func_r->on_fd_event(-e);
+                        auto f = fe._func_r;
+                        fe._func_r = nullptr;
+                        f->on_file_event(fe, -e);
                     }
                 }
                 else
                 {
-                    if (fe._enable_write && (events[n].events & EV_OUT))
+                    if (fe._func_w && (events[n].events & EV_OUT))
                     {
                         assert(fe._event & EPOLLOUT);
-                        const auto ver = fe._write_func_version;
-                        auto rc = fe._func_w->on_fd_event(io_loop::EM_WRITE);
-                        if (ver == fe._write_func_version)
-                        {
-                            fe._enable_write = rc;
-                        }
+                        auto f = fe._func_w;
+                        fe._func_w = nullptr;
+                        f->on_file_event(fe, io_loop::EM_WRITE);
                     }
 
-                    if (fe._enable_read && (events[n].events & EV_IN))
+                    if (fe._func_r && (events[n].events & EV_IN))
                     {
                         assert(fe._event & EPOLLIN);
-                        auto ver = fe._read_func_version;
-                        auto rc = fe._func_r->on_fd_event(io_loop::EM_READ);
-                        if (ver == fe._read_func_version)
-                        {
-                            fe._enable_read = rc;
-                        }
+                        auto f = fe._func_r;
+                        fe._func_r = nullptr;
+                        f->on_file_event(fe, io_loop::EM_READ);
                     }
                 }
             }
@@ -240,7 +224,7 @@ struct alignas(64) io_loop : io_callback //for-eventfd
                     auto t = std::move(_timer.back());
                     _timer.pop_back();
 
-                    t._func->on_time_out();
+                    t._func->on_time_event(t);
                 }
             }
         }
@@ -261,47 +245,47 @@ struct alignas(64) io_loop : io_callback //for-eventfd
             return -1;
 
         auto & fe = _fds[fd];
+        if (fe._fd == -1)
+        {
+            return 0;
+        }
 
-        assert(fe._fd != -1);
+        assert(ev != 0);
 
         fe._event &= ~ev;
 
-        if (fe._event & (EPOLLIN | EPOLLOUT))
+        if (fe._event & EPOLLIN)
         {
+            fe._func_w = 0;
+            return Epoll_ctl_mod(fd, fe._event);
+        }
+        else if (fe._event & EPOLLOUT)
+        {
+            fe._func_r = 0;
             return Epoll_ctl_mod(fd, fe._event);
         }
         else
         {
             fe._fd = -1;
+            fe._event = 0;
+            fe._func_r = fe._func_w = 0;
             return Epoll_ctl_del(fd);
         }
     }
 
     void cancel_read(int fd) noexcept
     {
-#if 0
-        _fds_pendding.emplace_back(fd, 2, EPOLLIN, [](int) -> int { return 0; });
-#else
         cancel_ev(fd, EPOLLIN);
-#endif
     }
 
     void cancel_write(int fd) noexcept
     {
-#if 0
-        _fds_pendding.emplace_back(fd, 2, EPOLLOUT, [](int) -> int { return 0; });
-#else
         cancel_ev(fd, EPOLLOUT);
-#endif
     }
 
     void cancel_fdall(int fd) noexcept
     {
-#if 0
-        _fds_pendding.emplace_back(fd, 2, EPOLLIN | EPOLLOUT, [](int) -> int { return 0; });
-#else
         cancel_ev(fd, EPOLLIN | EPOLLOUT);
-#endif
     }
 
     int Epoll_ctl_add(int fd, int type) noexcept
@@ -333,7 +317,8 @@ struct alignas(64) io_loop : io_callback //for-eventfd
         return epoll_ctl(_epoll_fd, EPOLL_CTL_DEL, fd, nullptr);
     }
 
-    int wait_fd(int fd, int type, io_callback * func) noexcept
+    template <uint32_t type>
+    int wait_fd(int fd, io_callback * func) noexcept
     {
         if ((int)_fds.size() <= fd)
         {
@@ -345,19 +330,14 @@ struct alignas(64) io_loop : io_callback //for-eventfd
         if (fe._fd == -1)
         {
             fe._fd = fd;
-            fe._enable_write = fe._enable_read = 0;
             fe._event = type;
 
-            if (type & EPOLLIN)
+            if constexpr (type == EPOLLIN)
             {
-                fe._enable_read = 1;
-                fe._read_func_version++;
                 fe._func_r = func;
             }
-            else
+            else if constexpr (type & EPOLLOUT)
             {
-                fe._enable_write = 1;
-                fe._write_func_version++;
                 fe._func_w = func;
             }
 
@@ -367,8 +347,6 @@ struct alignas(64) io_loop : io_callback //for-eventfd
         {
             if (type & EPOLLIN)
             {
-                fe._enable_read = 1;
-                ++fe._read_func_version;
                 fe._func_r = func;
 
                 if (fe._event & EPOLLIN)
@@ -376,8 +354,6 @@ struct alignas(64) io_loop : io_callback //for-eventfd
             }
             else
             {
-                fe._enable_write = 1;
-                ++fe._write_func_version;
                 fe._func_w = func;
 
                 if (fe._event & EPOLLOUT)
@@ -394,12 +370,12 @@ struct alignas(64) io_loop : io_callback //for-eventfd
 
     void wait_read(int fd, io_callback * f) noexcept
     {
-        wait_fd(fd, EPOLLIN, f);
+        wait_fd<EPOLLIN>(fd, f);
     }
 
     void wait_write(int fd, io_callback * f) noexcept
     {
-        wait_fd(fd, EPOLLOUT, f);
+        wait_fd<EPOLLOUT>(fd, f);
     }
 
     int delay_call(double after, io_callback * func) noexcept
@@ -410,7 +386,7 @@ struct alignas(64) io_loop : io_callback //for-eventfd
 
     int delay_call(const std::chrono::time_point<std::chrono::system_clock> & when, io_callback * func) noexcept
     {
-        timer_task tt;
+        es_time tt;
 
         tt._id = ++_g_timer_id;
         tt._when = when;
@@ -434,7 +410,7 @@ struct alignas(64) io_loop : io_callback //for-eventfd
     }
 
     template <typename T>
-    std::future<T> async(std::function<T()> func) noexcept
+    std::future<T> async_return(std::function<T()> && func) noexcept
     {
         assert(!is_local_thread());
 
@@ -461,7 +437,7 @@ struct alignas(64) io_loop : io_callback //for-eventfd
         return fu;
     }
 
-    std::future<void> async_call(std::function<void()> func) noexcept
+    std::future<void> async_call_return(std::function<void()> func) noexcept
     {
         if (is_local_thread()) [[unlikely]]
         {
@@ -472,7 +448,30 @@ struct alignas(64) io_loop : io_callback //for-eventfd
         }
         else
         {
-            return async(std::move(func));
+            return async_return(std::move(func));
+        }
+    }
+
+    template <typename T>
+    void async(std::function<T()> && func) noexcept
+    {
+        {
+            std::unique_lock lock(_async_mutex);
+            _async_funcs.emplace_back([f = std::move(func)]() { f(); });
+        }
+
+        eventfd_write(this->_event_fd, 1);
+    }
+
+    void async_call(std::function<void()> func) noexcept
+    {
+        if (is_local_thread())
+        {
+            func();
+        }
+        else
+        {
+            async(std::move(func));
         }
     }
 

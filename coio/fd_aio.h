@@ -1,6 +1,6 @@
 #pragma once
 
-#include <io_loop.h>
+#include <io_callback.h>
 
 struct byte_buffer;
 
@@ -13,7 +13,7 @@ struct io_aio : io_callback
         = 0;
     virtual int aio_write(int fd, off_t offset, std::unique_ptr<byte_buffer> & buff, io_callback * icb) noexcept = 0;
 
-    virtual int on_fd_event(int) noexcept = 0;
+    virtual void on_file_event(es_file &, int) = 0;
 
     virtual int event_fd() noexcept = 0;
 

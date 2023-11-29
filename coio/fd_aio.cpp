@@ -55,20 +55,20 @@ struct io_aio_impl : io_aio
             ::close(_efd);
     }
 
-    virtual int event_fd() noexcept override
+    int event_fd() noexcept override
     {
         return _efd;
     }
 
-    virtual int on_fd_event(int) noexcept override
+    void on_file_event(es_file & es, int) noexcept override
     {
         eventfd_t v;
         ::eventfd_read(_efd, &v);
-        skip_events();
-        return 1;
+        fetch_events();
+        es._func_r = this;
     }
 
-    void skip_events()
+    void fetch_events() noexcept
     {
         for(;;)
         {
@@ -80,7 +80,7 @@ struct io_aio_impl : io_aio
                 for (int i = 0; i < rc; i++)
                 {
                     io_callback * icb = (io_callback *)e[i].data;
-                    icb->on_fd_event(io_loop::EM_READ);
+                    icb->on_aio_event(e[i]);
                 }
 
                 _res+=rc;
@@ -112,7 +112,7 @@ struct io_aio_impl : io_aio
             {
                 if (errno == EAGAIN)
                 {
-                    this->skip_events();
+                    this->fetch_events();
                     continue;
                 }
 
@@ -191,95 +191,4 @@ std::unique_ptr<io_aio> io_aio::new_inst()
 {
     return std::make_unique<io_aio_impl>();
 }
-
-#if 0
-struct alignas(64) zaio
-{
-    static constexpr uint32_t _max_events = 256;
-    static constexpr uint32_t _batch_n = 32;
-
-    std::function<void(void *)> _func;
-    iocb _iocb[_batch_n];
-    iocb * _iv[_batch_n];
-    size_t _submitted = 0, _completed = 0;
-    size_t _cache_count = 0;
-
-    zaio(const std::function<void(void *)> & func) : _func(func)
-    {
-
-        for (size_t i = 0; i < _batch_n; i++)
-        {
-            _iv[i] = &_iocb[i];
-        }
-    }
-
-    ~zaio()
-    {
-    }
-
-    int flighting_count();
-
-    void write_add(int fd, size_t off, const void * buff, size_t len, const void * pv)
-    {
-        assert(_cache_count < _batch_n);
-
-        log_debug("aio request:fd=%d, off=%lX, len=%lX", fd, off, len);
-        set_iocb(_iocb[_cache_count++], fd, true, off, buff, len, pv);
-
-        if (_cache_count == _batch_n)
-            write_submit(true);
-    }
-
-    int write_submit(bool force = false)
-    {
-        if (_cache_count == 0 || (!force && _cache_count < _batch_n))
-        {
-            return 0;
-        }
-
-        if (_max_events < _cache_count + _submitted - _completed)
-        {
-            size_t i = 0;
-            for (i = 0;; i++)
-            {
-                if (_max_events >= _cache_count + flighting_count())
-                    break;
-                rte_delay_us(500);
-            }
-
-            if (i > 2)
-            {
-                log_warn("wait disk io count=%ld.", i);
-            }
-        }
-
-        int ret = io_submit(_ctx, _cache_count, &_iv[0]);
-
-        if (ret == (int)_cache_count)
-        {
-            _submitted += _cache_count;
-            _cache_count = 0;
-            return 0;
-        }
-
-        assert(false);
-
-        if (ret < 0)
-        {
-            log_errno("zaio::write_submit");
-            return -1;
-        }
-        else if (ret != (int)_cache_count)
-        {
-            log_errno("zaio::write_submit,Partial success (%zd instead of %zd). Bailing ou", ret, _cache_count);
-            return -1;
-        }
-
-        return -1;
-
-        //        return flighting_count();
-    }
-
-};
-#endif
 }

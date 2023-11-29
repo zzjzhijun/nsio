@@ -72,7 +72,7 @@ int main(int argc, char ** argv)
     stop_signal sw(&force_quit);
 
     co2::io_context ctx;
-    ctx.start();
+    ctx.run_worker();
 
     char path[128];
 

@@ -5,7 +5,9 @@
 
 ## 测试结果 
 
-- dstat -a
+2/4/8M... 都可以满足需求
+
+* dstat -a
 
 ### sudo ./test-diskw 4
 * --total-cpu-usage-- -dsk/total- -net/total- ---paging-- ---system--
