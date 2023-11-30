@@ -1,3 +1,4 @@
+#include "byte_buffer.h"
 #include "io_context.h"
 #include "io_loop.h"
 #include "log.h"
@@ -5,6 +6,7 @@
 #include <cerrno>
 #include <cstring>
 #include <inet_address.h>
+#include <memory>
 #include <sys/socket.h>
 #include <utility>
 #include <zio.h>
@@ -29,6 +31,7 @@ void accept::on_file_event(es_file & es, int)
             if (errno == EAGAIN)
             {
                 es._func_r = this;
+                errno = 0;
                 return;
             }
 
@@ -36,6 +39,7 @@ void accept::on_file_event(es_file & es, int)
             {
                 log_warn("accept socket:%d, will again...", serv_fd);
                 es._func_r = this;
+                errno = 0;
                 return;
             }
 
@@ -149,6 +153,7 @@ void recv_lazy::on_file_event(es_file & es, int event)
             if (errno == EAGAIN) [[likely]]
             {
                 es._func_r = this;
+                errno = 0;
                 return;
             }
 
@@ -180,6 +185,168 @@ recv_lazy::recv_lazy(int sockfd, std::span<char> buf, double time_out_sec, int f
 }
 
 
+void recv_request::on_time_event(es_time &)
+{
+    this->_is_timeout = 1;
+    this_context->cancel_read(_sockfd);
+
+    this->_handle.resume();
+}
+
+void recv_request::on_file_event(es_file & es, int event)
+{
+    if (event <= 0) [[unlikely]]
+    {
+        errno = -event;
+        log_warn("socket:%d error:%d %s", _sockfd, -event, strerror(-event));
+        _handle.resume();
+        return;
+    }
+
+    int rc;
+
+    if (_recved_bytes < 6)
+    {
+        for (; _recved_bytes < 6;)
+        {
+            rc = ::recv(_sockfd, this->_buf + _recved_bytes, 6 - _recved_bytes, _flags);
+
+            if (rc > 0)
+            {
+                _recved_bytes += rc;
+                continue;
+            }
+            else if (rc < 0)
+            {
+                if (errno == EAGAIN) [[likely]]
+                {
+                    es._func_r = this;
+                    errno = 0;
+                    return;
+                }
+
+                if (errno == EINTR)
+                    continue;
+
+                log_errno("recv_request header.");
+            }
+            else
+            {
+                log_info("socket:%d remote closed", _sockfd);
+            }
+            break;
+        }
+
+        if (rc <= 0 || _recved_bytes != 6)
+        {
+            _result = rc;
+            _handle.resume();
+            return;
+        }
+
+        _cmd_len = ntohl(*(uint32_t *)_buf);
+        auto align_off = (uint8_t)_buf[4];
+        auto align_bit = (uint8_t)_buf[5];
+
+        if (align_off == 0)
+        {
+            *_request = this_context->_buf_cache->malloc(_cmd_len + 4);
+            (*_request)->set_data_offset(0, _cmd_len + 4);
+        }
+        else
+        {
+            *_request = this_context->_buf_cache->malloc(_cmd_len + 4 - align_off, align_bit, align_off);
+            (*_request)->set_data_offset((*_request)->body_off() - align_off, _cmd_len + 4);
+        }
+
+        memcpy((*_request)->data(), _buf, 6);
+        _cmd_len += 4;
+    }
+
+    for (; _recved_bytes < _cmd_len;)
+    {
+        rc = ::recv(_sockfd, (*_request)->data() + _recved_bytes, _cmd_len - _recved_bytes, _flags);
+
+        if (rc > 0)
+        {
+            _recved_bytes += rc;
+            continue;
+        }
+        else if (rc < 0)
+        {
+            if (errno == EAGAIN) [[likely]]
+            {
+                es._func_r = this;
+                errno = 0;
+                return;
+            }
+
+            if (errno == EINTR)
+                continue;
+
+            log_errno("recv_request body.");
+        }
+        else
+        {
+            log_info("socket:%d remote closed", _sockfd);
+        }
+
+        _result = rc;
+        _handle.resume();
+        return;
+    }
+
+    _result = _recved_bytes;
+    _handle.resume();
+}
+
+recv_request::recv_request(int sockfd, std::unique_ptr<byte_buffer> & req, double time_out_sec, int flags) noexcept
+    : timeout(time_out_sec)
+{
+    _request = &req;
+    _sockfd = sockfd;
+    _flags = flags;
+    this_context->wait_read(sockfd, this);
+}
+
+
+task<int> recv_request2(int sockfd, std::unique_ptr<byte_buffer> & req)
+{
+    char header[6];
+    int rc;
+
+    rc = co_await recv_lazy(sockfd, std::span(header));
+    if (rc != 6)
+        co_return rc;
+
+    uint32_t req_len = ntohl(*(uint32_t *)&header[0]);
+    uint8_t & align_off = *(uint8_t *)&header[4];
+    uint8_t & align_bit = *(uint8_t *)&header[5];
+
+    if (align_bit == 0)
+        align_bit = 6;
+
+    if (align_off == 0) //不需要特殊对齐
+    {
+        req = this_context->_buf_cache->malloc(req_len + 4);
+        req->set_data_offset(0, req_len + 4);
+    }
+    else
+    {
+        req = this_context->_buf_cache->malloc(req_len + 4 - align_off, align_bit, align_off);
+        req->set_data_offset(req->body_off() - align_off, req_len + 4);
+    }
+
+    memcpy(req->data(), header, 6);
+
+    rc = co_await recv_lazy(sockfd, std::span(req->data() + 6, req_len - 2));
+
+    if (rc <= 0)
+        co_return rc;
+
+    co_return req->data_len();
+}
+
 void send_lazy::on_time_event(es_time &)
 {
     this->_is_timeout = 1;
@@ -208,6 +375,7 @@ void send_lazy::on_file_event(es_file & es, int event)
             if (errno == EAGAIN)
             {
                 es._func_w = this;
+                errno = 0;
                 return;
             }
 

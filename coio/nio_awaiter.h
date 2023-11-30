@@ -1,5 +1,6 @@
 #pragma once
 
+#include "byte_buffer.h"
 #include "io_context.h"
 #include <io_awaiter.h>
 
@@ -36,6 +37,25 @@ struct recv_lazy : timeout
     void on_time_event(es_time &) override;
 };
 
+struct recv_request : timeout
+{
+    int _is_timeout = 0;
+    int _recved_bytes = 0;
+    int _cmd_len = 0;
+    int _sockfd;
+    int _flags;
+    std::unique_ptr<byte_buffer> * _request;
+    union
+    {
+        uint8_t _buf[8];
+        uint64_t _header;
+    };
+
+    recv_request(int sockfd, std::unique_ptr<byte_buffer> & req, double time_out_sec = -1, int flags = 0) noexcept;
+    void on_file_event(es_file &, int) override;
+    void on_time_event(es_time &) override;
+};
+
 struct send_lazy : timeout
 {
     int _is_timeout = 0;
@@ -49,4 +69,5 @@ struct send_lazy : timeout
     void on_time_event(es_time &) override;
 };
 
+task<int> recv_request2(int sockfd, std::unique_ptr<byte_buffer> & req);
 }

@@ -53,6 +53,12 @@ struct byte_buffer_impl : byte_buffer
         return m_d.m_data + _data_begin;
     }
 
+    virtual void set_data_offset(uint32_t pos, uint32_t len) override final
+    {
+        _data_begin = pos;
+        _data_len = len;
+    }
+
     virtual void set_data_begin(uint32_t pos) override final
     {
         _data_begin = pos;
@@ -76,6 +82,11 @@ struct byte_buffer_impl : byte_buffer
     virtual uint32_t capacity() const override final
     {
         return m_d.m_len;
+    }
+
+    virtual uint32_t body_off() const override final
+    {
+        return this->_header_len;
     }
 
     ~byte_buffer_impl();

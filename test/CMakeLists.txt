@@ -1,12 +1,8 @@
 
-add_executable(pp-serv pp-serv.cpp)
-add_executable(pp-client pp-client.cpp)
-add_executable(test-timer test-timer.cpp)
-add_executable(test-diskw test-diskw.cpp)
+file(GLOB_RECURSE all_examples *.cpp)
+foreach(example ${all_examples})
+    get_filename_component(target_name ${example} NAME_WE)
 
-target_link_libraries(test-diskw PUBLIC coio)
-target_link_libraries(test-timer PUBLIC coio)
-target_link_libraries(pp-serv PUBLIC coio)
-target_link_libraries(pp-client PUBLIC coio)
-
-
+    add_executable(${target_name} ${example})
+    target_link_libraries(${target_name} PRIVATE coio)
+endforeach()

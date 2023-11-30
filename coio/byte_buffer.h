@@ -14,12 +14,14 @@ struct byte_buffer
     virtual char * body() const = 0;
     virtual char * data() const = 0;
 
+    virtual void set_data_offset(uint32_t beg, uint32_t len) = 0;
     virtual void set_data_begin(uint32_t pos) = 0;
-    virtual void set_data_len(uint32_t pos) = 0;
+    virtual void set_data_len(uint32_t len) = 0;
     virtual uint32_t data_len() const = 0;
 
     virtual uint32_t align() const = 0;
     virtual uint32_t capacity() const = 0;
+    virtual uint32_t body_off() const = 0;
 
     virtual ~byte_buffer() = default;
 };
