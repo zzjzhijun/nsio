@@ -21,7 +21,7 @@ struct io_context final : io_loop
     std::unique_ptr<io_aio> _aio;
     std::unique_ptr<byte_buffer_pool> _buf_cache = byte_buffer_pool::new_inst(32 << 20);
 
-    io_context(bool use_aio = true);
+    io_context(bool use_aio = false);
     ~io_context() noexcept;
 
     void co_spawn(co2::task<void> && entrance) noexcept
